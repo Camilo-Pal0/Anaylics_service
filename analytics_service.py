@@ -50,23 +50,44 @@ def analisis_asistencia_general():
         
         df = pd.read_sql(query, engine)
         
+        # Si no hay datos, devolver estructura vacía
+        if df.empty:
+            return jsonify({
+                'estado_general': {},
+                'tendencia_diaria': {'fechas': [], 'presente': [], 'ausente': [], 'tardanza': [], 'justificado': []},
+                'asistencia_por_materia': {}
+            })
+        
         # Análisis por estado
         estado_counts = df['estado'].value_counts().to_dict()
         
+        # Asegurar que fecha sea datetime
+        df['fecha'] = pd.to_datetime(df['fecha'])
+        
         # Tendencia diaria
         tendencia = df.groupby(['fecha', 'estado']).size().unstack(fill_value=0)
+        
+        # Convertir fechas a string de forma segura
+        fechas_str = [fecha.strftime('%Y-%m-%d') if hasattr(fecha, 'strftime') else str(fecha) 
+                      for fecha in tendencia.index]
+        
         tendencia_dict = {
-            'fechas': tendencia.index.strftime('%Y-%m-%d').tolist(),
-            'presente': tendencia.get('PRESENTE', pd.Series()).tolist(),
-            'ausente': tendencia.get('AUSENTE', pd.Series()).tolist(),
-            'tardanza': tendencia.get('TARDANZA', pd.Series()).tolist(),
-            'justificado': tendencia.get('JUSTIFICADO', pd.Series()).tolist()
+            'fechas': fechas_str,
+            'presente': tendencia.get('PRESENTE', pd.Series(0, index=tendencia.index)).tolist(),
+            'ausente': tendencia.get('AUSENTE', pd.Series(0, index=tendencia.index)).tolist(),
+            'tardanza': tendencia.get('TARDANZA', pd.Series(0, index=tendencia.index)).tolist(),
+            'justificado': tendencia.get('JUSTIFICADO', pd.Series(0, index=tendencia.index)).tolist()
         }
         
         # Porcentaje de asistencia por materia
-        asistencia_materia = df.groupby('materia').apply(
-            lambda x: (x['estado'].isin(['PRESENTE', 'TARDANZA']).sum() / len(x) * 100)
-        ).round(2).to_dict()
+        asistencia_materia = {}
+        for materia in df['materia'].unique():
+            df_materia = df[df['materia'] == materia]
+            total = len(df_materia)
+            if total > 0:
+                asistencias = df_materia['estado'].isin(['PRESENTE', 'TARDANZA']).sum()
+                porcentaje = round((asistencias / total) * 100, 2)
+                asistencia_materia[materia] = porcentaje
         
         return jsonify({
             'estado_general': estado_counts,
@@ -75,99 +96,9 @@ def analisis_asistencia_general():
         })
         
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/analytics/asistencia/grupo/<int:grupo_id>', methods=['GET'])
-def analisis_asistencia_grupo(grupo_id):
-    """Análisis de asistencias por grupo"""
-    try:
-        query = f"""
-        SELECT 
-            a.fecha,
-            a.estado,
-            u.nombre_usuario as estudiante,
-            u.email
-        FROM asistencias a
-        JOIN usuarios u ON a.estudiante_id = u.id
-        WHERE a.grupo_id = {grupo_id}
-        ORDER BY a.fecha DESC
-        """
-        
-        df = pd.read_sql(query, engine)
-        
-        if df.empty:
-            return jsonify({'mensaje': 'No hay datos de asistencia para este grupo'})
-        
-        # Análisis por estudiante
-        estudiante_stats = df.groupby('estudiante').agg({
-            'estado': lambda x: {
-                'total_clases': len(x),
-                'presentes': (x == 'PRESENTE').sum(),
-                'ausentes': (x == 'AUSENTE').sum(),
-                'tardanzas': (x == 'TARDANZA').sum(),
-                'justificados': (x == 'JUSTIFICADO').sum(),
-                'porcentaje_asistencia': round((x.isin(['PRESENTE', 'TARDANZA']).sum() / len(x) * 100), 2)
-            }
-        }).to_dict()['estado']
-        
-        # Tendencia semanal
-        df['semana'] = pd.to_datetime(df['fecha']).dt.isocalendar().week
-        tendencia_semanal = df.groupby(['semana', 'estado']).size().unstack(fill_value=0).to_dict('index')
-        
-        return jsonify({
-            'estadisticas_estudiantes': estudiante_stats,
-            'tendencia_semanal': tendencia_semanal
-        })
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/analytics/asistencia/estudiante/<int:estudiante_id>', methods=['GET'])
-def analisis_asistencia_estudiante(estudiante_id):
-    """Análisis de asistencias de un estudiante específico"""
-    try:
-        query = f"""
-        SELECT 
-            a.fecha,
-            a.estado,
-            g.codigo as grupo_codigo,
-            g.materia
-        FROM asistencias a
-        JOIN grupos g ON a.grupo_id = g.id
-        WHERE a.estudiante_id = {estudiante_id}
-        ORDER BY a.fecha DESC
-        """
-        
-        df = pd.read_sql(query, engine)
-        
-        if df.empty:
-            return jsonify({'mensaje': 'No hay datos de asistencia para este estudiante'})
-        
-        # Estadísticas generales
-        stats = {
-            'total_clases': len(df),
-            'presentes': (df['estado'] == 'PRESENTE').sum(),
-            'ausentes': (df['estado'] == 'AUSENTE').sum(),
-            'tardanzas': (df['estado'] == 'TARDANZA').sum(),
-            'justificados': (df['estado'] == 'JUSTIFICADO').sum(),
-            'porcentaje_asistencia': round((df['estado'].isin(['PRESENTE', 'TARDANZA']).sum() / len(df) * 100), 2)
-        }
-        
-        # Por materia
-        por_materia = df.groupby('materia').apply(
-            lambda x: {
-                'total': len(x),
-                'asistencias': (x['estado'].isin(['PRESENTE', 'TARDANZA'])).sum(),
-                'porcentaje': round((x['estado'].isin(['PRESENTE', 'TARDANZA']).sum() / len(x) * 100), 2)
-            }
-        ).to_dict()
-        
-        return jsonify({
-            'estadisticas_generales': stats,
-            'por_materia': por_materia
-        })
-        
-    except Exception as e:
+        print(f"Error en analisis_asistencia_general: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/analytics/reporte/profesor/<int:profesor_id>', methods=['GET'])
